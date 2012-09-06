@@ -10,12 +10,20 @@ class Student extends MY_Controller {
 
     public function index()
     {
+        $this->load->model("student_model");
+        $this->load->model("team_model");
 
         $this->load->helper('studentprofile_helper');
         $data["current_page"] = 'index';
         $data["student_logged_in"] = $this->current_student_info;
-        //Retrieve all students information to send to view
-        $data["students"] = $this->student_model->get_all_students($record_offset = 0);
+
+        //Retrieve 2 new students/teams and send to view
+        $data["new_students"] = $this->student_model->get_new_students(2);
+        $data["new_teams"] = $this->team_model->get_new_teams(2);
+        foreach($data["new_teams"] as $new_team):
+            $new_team->team_members = $this->team_model->get_team_members($new_team->team_id);
+        endforeach;
+
         $data['profile_completion'] = profile_completed($this->current_student_info);
 
         //Get a count of all notifications for this user and pass count to student/includes/navigation view
@@ -35,14 +43,14 @@ class Student extends MY_Controller {
         $this->form_validation->set_rules('query', 'search terms', 'trim|required|htmlspecialchars|xss_clean');
 
         //If form does not validate according to rules above, load form view with error messages
-        if ($this->form_validation->run() == FALSE):
+       /* if ($this->form_validation->run() == FALSE):
 
             $data["student_logged_in"] = $this->current_student_info;
             $this->load->view('student/home', $data);
 
         //Else, display students according to search term
-        else:
-
+        else:*/
+            /*
             if (strpos(",", $query) != FALSE)
                 $query_exploded = explode(',', $query);
             else
@@ -55,15 +63,27 @@ class Student extends MY_Controller {
                 if ($i != sizeof($query_exploded) - 1)
                     $search_string = $search_string . ' | ';
                 $i++;
+            endforeach;*/
+
+            $data["students"] = $this->student_model->search_students($query);
+            foreach($data["students"] as $student):
+
+                $student_skills = $this->student_model->get_student_skills($student->student_id);
+                $student->skills = '';
+
+                foreach($student_skills as $skill):
+                    $student->skills = $student->skills . $skill->skill . ', ';
+                endforeach;
+
             endforeach;
 
-            $data["students"] = $this->student_model->search_students($search_string);
             $data["student_logged_in"] = $this->current_student_info;
             $data["search_query"] = $query;
+            $data["notifications"] = $this->student_model->get_notifications($this->current_student_id);
 
-            $this->load->view('student/view_students', $data);
+            $this->load->view('student/search_students', $data);
 
-        endif;
+        //endif;
 
     }
 
@@ -185,32 +205,14 @@ class Student extends MY_Controller {
                 $student_data["password"] = sha1($password);
             endif;
 
-            $skills_array = explode(',', $skills);
-
-            foreach($skills_array as $skill):
-                $skill = trim($skill);
-                if (!empty($skill)):
-                    $existing_skill = $this->student_model->find_skill($skill);
-
-                    if (empty($existing_skill)):
-                        echo 'This skill does not exist: '.$skill;
-                        $skill_id = $this->student_model->add_skill($skill);
-                        echo ' and now has id: '.$skill_id;
-                    else:
-
-                        $skill_id = $existing_skill[0]->skill_id;
-                        echo 'Need to add skill '. $skill_id;
-                    endif;
-                    $this->student_model->add_student_skill($this->current_student_id, $skill_id);
-                endif;
-            endforeach;
+            $skills_affected = $this->student_model->update_student_skills($student_id, $skills);
 
             //Load message library for setting success/error messages
             $this->load->library('message');
 
             $rows_affected = $this->student_model->edit_student($student_id, $student_data);
 
-            if ($rows_affected):
+            if ($rows_affected || $skills_affected):
                 $this->message->set("You have successfully edited your account profile", "success", TRUE);
                 redirect("student/edit_form");
             else:
@@ -224,13 +226,13 @@ class Student extends MY_Controller {
 
     }
 
+
     public function upload_profile_pic(){
 
         //set the path to root
         $config['upload_path'] = './uploads/students/pictures';
         $config['allowed_types'] = 'gif|jpg|png';
-        //append unix time stamp for unique update
-        $config['file_name'] = "studentpic_" . $this->current_student_id . "_" . time();
+        $config['file_name'] = "studentpic_" . sha1($this->current_student_id);
 
         //2000kb and max image width and height
         $config['max_size']	= '2000';
@@ -276,7 +278,25 @@ class Student extends MY_Controller {
             redirect("student/edit_form");
         endif;
     }
-
+    //view single student
+    public function view_student($id=null){
+        $data['student'] = $this->student_model->get_student($id);
+        if($data['student'] && !is_null($id)):
+            $data["current_page"] = 'student';
+            $data["notifications"] = $this->student_model->get_notifications($id);
+            $data['student']->skills = '';
+            $student_skills = $this->student_model->get_student_skills($id);
+            foreach($student_skills as $skill):
+                $data['student']->skills = $data['student']->skills . $skill->skill . ', ';
+            endforeach;
+            $this->load->view('student/view_student', $data);
+        else:
+            $data["current_page"] = 'student';
+            $data["student"] = null;
+            $data['notifications'] = null;
+            $this->load->view('student/view_student', $data);
+        endif;
+    }
     //View all students
     public function view_all($record_offset = 0){
         $this->load->library('pagination');
@@ -291,7 +311,7 @@ class Student extends MY_Controller {
 
         foreach($data["students"] as $student):
 
-            $student_skills = $this->student_model->get_student_skills($this->current_student_id);
+            $student_skills = $this->student_model->get_student_skills($student->student_id);
             $student->skills = '';
 
             foreach($student_skills as $skill):
@@ -321,6 +341,7 @@ class Student extends MY_Controller {
         header("Content-type: application/json");
         echo json_encode($data);
     }
+
 
 }
 

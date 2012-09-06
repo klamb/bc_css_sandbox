@@ -5,6 +5,10 @@ class Student_model extends CI_Model {
     public function get_all_students($record_offset)
     {
         $this->load->helper('pagination_helper');
+        $this->db->order_by('first', 'asc');
+        $this->db->join('schools', 'schools.school_id = students.school_id', 'left');
+        $this->db->join('majors', 'majors.major_id = students.major_id', 'left');
+
         $query = $this->db->get('students', PaginationSettings::per_page(), $record_offset);
         $result = $query->result();
 
@@ -49,12 +53,54 @@ class Student_model extends CI_Model {
 
     public function get_student_skills($student_id)
     {
+
         $this->db->select('skills.skill_id, skill');
         $query = $this->db->join("skills", "skills.skill_id = student_skills.skill_id")->get_where('student_skills', array('student_id'=>$student_id));
         $result = $query->result();
 
         return $result;
     }
+	
+	function parse_skills($skills){
+		$new_array = explode(",", $skills);
+
+		foreach($new_array as $key=>$item):
+			$new_array[$key] = trim($item);
+		endforeach;
+		
+		$skills = array_filter($new_array);
+	
+		return $skills;
+	}
+	
+	public function update_student_skills($student_id, $skills){
+		$original_skills = $this->student_model->get_student_skills($student_id);
+		$skills_value = "";
+		$rows_affected = 0;
+		
+		foreach($original_skills as $row){
+			$skills_value .= $row->skill . ",";
+		}
+		//parse the string and filter null and empty values
+		$skill_array= $this->parse_skills($skills_value);
+		$new_skill_array = $this->parse_skills($skills);
+		
+		//find difference between new and original tag list
+		$added = array_diff($new_skill_array, $skill_array);
+		$deleted = array_diff($skill_array, $new_skill_array);
+
+		if(!empty($added) || empty($skill_array)):
+			$this->student_model->add_skills($student_id, $added);
+			$rows_affected += $this->db->affected_rows();
+		endif;
+		
+		if(!empty($deleted) || empty($new_skill_array)):
+			$this->student_model->delete_skills($student_id, $deleted);
+			$rows_affected += $this->db->affected_rows();
+		endif;
+		
+		return $rows_affected;
+	}
 
     public function add_student($student_data)
     {
@@ -68,29 +114,32 @@ class Student_model extends CI_Model {
     {
         $this->db->where('student_id', $student_id);
         $this->db->update('students', $student_data);
-
+			
         $affected_rows = $this->db->affected_rows();
         //Return # of affected rows
         return $affected_rows;
     }
 
-    /* This method needs a lot of improvement in terms of full text searching in postgreSQL */
     public function search_students($query)
     {
 
-        //Escape query to protect against SQL injection, etc
-        $query = $this->db->escape($query);
+        $this->db->join('student_skills', 'student_skills.student_id = students.student_id', 'left');
+        $this->db->join('skills', 'skills.skill_id = student_skills.skill_id', 'left');
+        $this->db->join('schools', 'schools.school_id = students.school_id', 'left');
+        $this->db->join('majors', 'majors.major_id = students.major_id', 'left');
 
-        //First attempt at Full Text search in postgreSQL
-        $sql = "SELECT * FROM students
-					LEFT JOIN majors ON majors.major_id = students.major_id
-					LEFT JOIN schools ON schools.school_id = students.school_id
-					WHERE to_tsvector(first || ' ' || last || ' ' || skills || ' ' || software || ' ' || major || ' ' || school) @@ to_tsquery($query)
-					";
+        $this->db->like('first', $query);
+        $this->db->or_like('last', $query);
+        $this->db->or_like('school', $query);
+        $this->db->or_like('major', $query);
+        $this->db->or_like('skill', $query);
 
-        $query = $this->db->query($sql);
+        $this->db->distinct('students.student_id');
 
+        $this->db->select('first, last, email, oauth_uid, students.school_id, students.major_id, students.student_id, picture, schools.school, year, majors.major, bio, status, twitter, facebook, linkedin, dribbble, github');
+        $query = $this->db->get('students');
         $result = $query->result();
+
         return $result;
 
     }
@@ -161,16 +210,15 @@ class Student_model extends CI_Model {
         $data = array(
             'picture' => $file_name,
         );
-        $this->db->where('student_id', $student_id);
-        $this->db->update('students', $data);
-
-        $rows_affected = $this->db->affected_rows();
-
-        if($rows_affected > 0)
-            return TRUE;
-        else
-            return FALSE;
-
+		
+		try{
+        	$this->db->where('student_id', $student_id);
+        	$this->db->update('students', $data);
+			return TRUE;
+		} catch (Exception $e) {
+    		//echo 'Update failed: ',  $e->getMessage(), "\n";
+			return FALSE;
+		}
     }
 
     public function delete_profile_picture($student_id){
@@ -245,4 +293,89 @@ class Student_model extends CI_Model {
 
         return $results;
     }
+	
+	
+	public function add_skills($student_id, $skills){
+		
+		foreach($skills as $value):
+
+			$this->db->select('skill_id');
+			$this->db->from('skills');
+			$this->db->where('skill', $value);
+			$search_result = $this->db->get();
+			$rows = $search_result->num_rows();
+			
+			//If tag already exists
+			if($rows > 0):
+				$skill_id = $search_result->row()->skill_id;
+				//Now check for primary key violation
+				$this->db->select('*');
+				$this->db->from('student_skills');
+				$this->db->where('student_id', $student_id);
+				$this->db->where('skill_id', $skill_id);
+				$duplicate_check_result = $this->db->get();
+				$duplicate_rows = $duplicate_check_result->num_rows();
+				
+				//If question not yet associated with tag
+				if($duplicate_rows == 0):
+					$this->db->set('student_id', $student_id);
+					$this->db->set('skill_id', $skill_id);
+					$this->db->insert('student_skills');
+			 	endif;
+			//If tag does not exist	
+			else:
+					$this->db->set('skill', $value);
+					$this->db->insert('skills');	
+					
+					$skill_id = $this->db->insert_id();
+					
+					$this->db->set('student_id', $student_id);
+					$this->db->set('skill_id', $skill_id);
+					$this->db->insert('student_skills');
+			endif;
+				
+	 endforeach;	
+	}
+
+	public function delete_skills($student_id, $skills){
+
+		foreach($skills as $value):
+			//unsupported by active record
+			$delete_query = "DELETE 
+							 FROM student_skills
+							 USING student_skills
+							 JOIN skills ON student_skills.skill_id = skills.skill_id 
+							 WHERE student_id = $student_id 
+							 AND skill = '$value'";
+				 
+			$this->db->query($delete_query);
+	
+			$this->db->select('student_id');
+			$this->db->from("student_skills");
+			$this->db->join("skills", "student_skills.skill_id = skills.skill_id");
+			$this->db->where("skill",$value);
+			$num_exists = $this->db->count_all_results();
+			
+			if($num_exists == 0):
+				$this->db->from("skills");
+				$this->db->where("skill", $value);
+				$this->db->delete("skills");
+			endif;
+			
+		endforeach;
+	}
+
+    public function get_new_students($limit){
+
+        $this->db->limit($limit);
+        $this->db->join('majors','majors.major_id = students.major_id', 'left');
+        $this->db->join('schools','schools.school_id = students.school_id', 'left');
+        $this->db->order_by('student_id', 'DESC');
+        $query = $this->db->get('students');
+        $results = $query->result();
+
+        return $results;
+
+    }
+
 }

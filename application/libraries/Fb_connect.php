@@ -7,8 +7,8 @@ class Fb_connect{
 	public function __construct(){
 		$this->CI = &get_instance();
 		
-		$app_id = get_cfg_var('aws.param5');
-		$secret = get_cfg_var('aws.param6');
+		$app_id = '173070729494386';
+		$secret = '1f057a69afe8e961929cc268e03dece8';
 		
 		$this->config = array(
   			'appId'  => $app_id,
@@ -22,7 +22,7 @@ class Fb_connect{
 	}
 	
 	public function get_login_url(){
-	  	return $this->CI->facebook->getLoginUrl(array("scope" => "email"));
+	  	return $this->CI->facebook->getLoginUrl(array("scope" => array("email", "user_education_history")));
 	}
 	
 	public function get_user_info($user_id){
